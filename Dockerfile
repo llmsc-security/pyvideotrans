@@ -1,16 +1,13 @@
-# Multi-stage build for pyVideoTrans
+# Multi-stage build for pyVideoTrans - with headless GUI support via Xvfb
 # -------------------------------------------------
 #  Builder stage – compile and install Python deps
 # -------------------------------------------------
 FROM python:3.10-slim-bookworm AS builder
 
-# Prevent interactive prompts during apt operations
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Working directory for the build
 WORKDIR /build
 
-# Install build-time system packages
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
@@ -23,59 +20,69 @@ RUN apt-get update && \
         libsndfile1-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip/setuptools/wheel and create a virtual-env
 RUN python -m pip install --upgrade pip setuptools wheel && \
     python -m venv /opt/venv
 
-# Make the venv the default Python environment for the rest of the stage
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 ENV PIP_NO_CACHE_DIR=1
 
-# Install runtime Python packages
 COPY pyproject.toml .
 RUN pip install --default-timeout=300 --no-cache-dir .
 
 # -------------------------------------------------
-#  Runtime stage – lightweight image with app code
+#  Runtime stage – with headless GUI support
 # -------------------------------------------------
 FROM python:3.10-slim-bookworm
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Application work directory
 WORKDIR /app
 
-# Copy the pre-built virtual environment from the builder
 COPY --from=builder /opt/venv /opt/venv
 
-# Install only the runtime system packages
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ffmpeg \
         libsndfile1 \
-        ca-certificates && \
+        ca-certificates \
+        xvfb \
+        x11-utils \
+        libegl1 \
+        libgbm1 \
+        libgl1-mesa-glx \
+        libxkbcommon0 \
+        libxrandr2 \
+        libxinerama1 \
+        libxcursor1 \
+        libxcomposite1 \
+        libxdamage1 \
+        libatk1.0-0 \
+        libatk-bridge2.0-0 && \
     rm -rf /var/lib/apt/lists/*
 
-# Environment variables
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}" \
     PYTHONPATH="/app" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8
+    LC_ALL=C.UTF-8 \
+    QT_QPA_PLATFORM="eglfs" \
+    QT_EGL_SERVER_DEVICE=" /dev/dri/card0" \
+    QT_DEBUG_PLUGINS=1
 
-# Create non-root user
 RUN groupadd -r appuser && \
     useradd -r -g appuser -d /app -s /bin/bash appuser && \
     chown -R appuser:appuser /app
 
-# Switch to non-root user
 USER appuser
 
-# Copy application code
 COPY --chown=appuser:appuser . .
 
-# Default command - can be overridden
-CMD ["python", "sp.py"]
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+
+EXPOSE 11160
+
+ENTRYPOINT ["/entrypoint.sh"]
